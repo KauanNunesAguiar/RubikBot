@@ -1,8 +1,11 @@
 import serial, time, datetime
+import os
 
 PORT = "com7"
 BAUD = 115200
-OUT = "sweep_log.txt"
+
+os.makedirs("logs", exist_ok=True)
+OUT = "logs/sweep_log.txt"
 
 while True:
     try:

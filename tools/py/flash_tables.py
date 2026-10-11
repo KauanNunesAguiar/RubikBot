@@ -1,5 +1,8 @@
 import struct, sys, time, zlib
 import serial
+import os
+
+TABDIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "tables")
 
 PORT = "com7"
 BAUD = 921600  # igual ao do flasher
@@ -21,7 +24,7 @@ if ident != bytes([0xEF, 0x40, 0x15]):
     sys.exit("W25Q16 não respondeu")
 
 for name, addr in TABLES:
-    data = open(name, "rb").read()
+    data = open(os.path.join(TABDIR, name), "rb").read()
     print(f"{name}: {len(data)} bytes em 0x{addr:06X}")
     s.write(b"W" + struct.pack("<II", addr, len(data)))
     if s.read(1) != b"K":

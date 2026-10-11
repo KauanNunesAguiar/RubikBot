@@ -1,8 +1,8 @@
-#include <Adafruit_NeoPixel.h>
 #include <Arduino.h>
 #include <STM32FreeRTOS.h>
 #include <stdlib.h>
 
+#include "ActuatorLink.h"
 #include "Coords.h"
 #include "CubeHUD.h"
 #include "CubeSolver.h"
