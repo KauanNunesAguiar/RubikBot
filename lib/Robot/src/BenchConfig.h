@@ -37,6 +37,19 @@
 #define BENCH_RESULT_TIMEOUT_MS 5000
 #endif
 
+/* --- Enlace com o atuador (9.4 / 9.5) --- */
+#ifndef BENCH_ACT_MOVE_TIMEOUT_MS
+#define BENCH_ACT_MOVE_TIMEOUT_MS 3000  // tempo máximo de uma janela (até 180 graus); calibrar na 9.6
+#endif
+#ifndef BENCH_ACT_RETRY_MS
+#define BENCH_ACT_RETRY_MS 250  // reenvio do mesmo comando se não houver resposta
+#endif
+#ifndef BENCH_ACT_PING_MS
+#define BENCH_ACT_PING_MS 300  // keep-alive quando ocioso (tem que ser < PROTO_WATCHDOG_MS = 1000)
+#endif
+static_assert(BENCH_ACT_RETRY_MS < BENCH_ACT_MOVE_TIMEOUT_MS, "retry >= timeout");
+static_assert(BENCH_ACT_PING_MS < 1000, "ping deve ser menor que o watchdog do atuador");
+
 /* --- Seeds (treino x teste nunca iguais; xorshift32 não aceita 0) --- */
 #ifndef BENCH_SEED_TRAIN
 #define BENCH_SEED_TRAIN 1001
