@@ -51,6 +51,10 @@ class CubeState {
 	void toString(char out[55]) const;  // 54 letras "URFDLB" + '\0' (formato do Kociemba)
 	bool fromString(const char* s);     // aceita 54 letras U R F D L B (não valida se é resolvível)
 
+	/* perm[i] = posição final do adesivo que começou em i, depois de executar seq.
+	 * Retorna false se seq for inválida (perm = identidade). */
+	static bool stickerPerm(const char* seq, uint8_t perm[54]);
+
    private:
 	uint8_t _s[54];
 };

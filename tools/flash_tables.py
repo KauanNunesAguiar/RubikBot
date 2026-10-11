@@ -1,7 +1,7 @@
 import struct, sys, time, zlib
 import serial
 
-PORT = "com17"
+PORT = "com7"
 BAUD = 921600  # igual ao do flasher
 TABLES = [
     ("twist_slice.bin", 0x000000),

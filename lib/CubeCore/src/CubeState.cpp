@@ -173,3 +173,18 @@ bool CubeState::fromString(const char* s) {
 	memcpy(_s, tmp, 54);
 	return true;
 }
+
+bool CubeState::stickerPerm(const char* seq, uint8_t perm[54]) {
+	initTables();
+	for (uint8_t i = 0; i < 54; i++) perm[i] = i;
+	const char* p = seq;
+	CubeMove m;
+	while (nextMove(p, m))
+		for (uint8_t t = 0; t < m.turns; t++)
+			for (uint8_t i = 0; i < 54; i++) perm[i] = g_perm[m.face][perm[i]];
+	if (*p) {  // token inválido
+		for (uint8_t i = 0; i < 54; i++) perm[i] = i;
+		return false;
+	}
+	return true;
+}

@@ -276,31 +276,35 @@ MARCOS (a ordem das etapas já segue esta ordem)
  M9 (Etapa 17) análise comparativa e escolha da combinação final
 
 ======================================================================
-ETAPA 8 - Preparação no PC (sem hardware novo)  [PENDENTE]
+ETAPA 8 - Preparação no PC (sem hardware novo)  [CONCLUÍDA]
 ======================================================================
 Objetivo: definir poses, sequência T e formatos de dados antes de ligar qualquer motor.
-  [ ] 8.1  [MVP] BenchConfig.h MÍNIMO (lib/Robot/src): só os #define que o MVP usa
-           (UARTs, BENCH_SETTLE_MS, janelas do embaralhamento, CHECKPOINT_EVERY),
-           todos com #ifndef e static_assert; os valores efetivos saem no log.
-           Pino não definido com a feature ligada = #error
-  [ ] 8.2  [MVP] tools/pose_sim (C++ no PC, reusando CubeState/CubieCube/Coords como o
-           tools/gen_tables): valida a sequência T (exemplo: (B F')(L R')(U D')(F B') =
-           4 janelas): as 24 facetas móveis da pose B têm de ser todas distintas das
-           da pose A; T seguido de T' = identidade. Se não servir, BFS offline pela
-           sequência com menos janelas (só pares opostos)
-  [ ] 8.3  [MVP] CubeState::stickerPerm(seq, perm[54]) (usa g_perm): mapa imagem ->
-           Kociemba da pose B por SIMULAÇÃO, composto com a pose A. Nada digitado à mão
-  [ ] 8.4  [MVP] docs/poses.md + poses.h: poses A e B, as 27 posições da imagem (ordem
-           canônica) e as facetas Kociemba; centro = 7 (desconhecida) no RESULT e
-           "ignorar" no rótulo; TABELA DE ORIENTAÇÃO por câmera (rotação 0/90/180/270 e
-           espelho): o Master envia rótulos em ordem canônica e cada slave aplica a sua
-  [ ] 8.5  [MVP] docs/dataset.md: nomes de arquivo (/<camera>/<cube_id>/<trial>_<pose>.raw)
-           e sidecar com 27 rótulos, câmera, resolução, registradores, luz, seed,
-           firmware e orientação; formato do CSV de resultados; chaves de junção
-  [ ] 8.6  [MVP] Embaralhamento com seed no Master (xorshift próprio, como o sweep), em
-           JANELAS (face única ou par oposto), partindo do estado atual. Sem plano
-           offline no MVP (o plano fixo só é necessário na Etapa 16)
-  Critério: T validada no PC; formatos de dados escritos.
+  [x] 8.1  BenchConfig.h mínimo (lib/Robot/src): UARTs, SETTLE, janelas, CHECKPOINT,
+           tentativas, timeouts, seeds (train != test, != 0), PIN_SLAVE_TRIG com #error.
+           benchPrintConfig() imprime os valores efetivos. static_assert validados no
+           PC e pio run do env principal OK (stickerPerm + BenchConfig.h compilam)
+  [x] 8.2  tools/pose_sim: valida T e faz busca IDDFS por janelas de pares opostos.
+           RESULTADO: a T do exemplo (B F' L R' U D' F B') é INVÁLIDA (8 das 24
+           facetas móveis da pose B repetem as da pose A). Não existe T com 1 a 4
+           janelas. T ADOTADA (5 janelas, custo 7 quartos de volta):
+             T  = D R2 L2 U D F B' R2 L'    (janelas: D | R2 L2 | U D | F B' | R2 L')
+             T' = L R2 B F' D' U' L2 R2 D'
+           T.T' = identidade OK; centros fixos; cobertura 48/48 facetas móveis
+  [x] 8.3  CubeState::stickerPerm(seq, perm[54]) (perm[i] = destino do adesivo i)
+  [x] 8.4  poses.h GERADO pelo pose_sim (POSE_T_SEQ, POSE_A/B_FACELET,
+           POSE_OF/IMG_OF_FACELET, poseOrient/CamOrient) + docs/poses.md
+           Decisões: câmera vê o canto URF (U,F,R); canônico = U(0-8) F(9-17) R(18-26);
+           mapas referentes ao estado ANTES do T; orientação = rot/espelho da grade 3x3
+           de cada face. Pose B (j: facelet): U 38 41 44 37 4 30 36 39 42 |
+           F 47 50 53 32 22 52 45 48 51 | R 33 43 27 34 13 28 35 46 29
+  [x] 8.5  docs/dataset.md (nomes, sidecar JSON, CSV de resultados, chaves de junção)
+  [x] 8.6  lib/Robot/src/Scrambler.h: xorshift32, janelas (face única ou par oposto),
+           eixos consecutivos diferentes, 15 combinações por eixo. Testado no PC
+           (2000 x 15 janelas: determinismo, parser, eixos; 59% pares / 41% simples).
+           Falta só ligar ao ciclo DATAGEN (10.4)
+  Critério: T validada no PC (feito); formatos de dados escritos (feito).
+  Impacto: T tem 5 janelas (não 4); considerar no tempo por trial (piloto 14.7) e no
+  BENCH_SETTLE_MS (9.6)
 
 ======================================================================
 ETAPA 9 - Atuador e motores  [PENDENTE]  (M1)
