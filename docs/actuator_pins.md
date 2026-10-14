@@ -1,4 +1,4 @@
-# Pinos do atuador (STM32F103C8T6) — PROPOSTA, conferir no módulo
+# Pinos do atuador (STM32F103C8T6) — CONFIRMADO
 
 Eixos: 0=U 1=R 2=F 3=D 4=L 5=B (mesma ordem do CubeFace). Janelas giram 2 eixos opostos juntos;
 os pulsos saem de UMA ISR de timer que alterna qualquer GPIO, então STEP/DIR não precisam de pinos de timer.

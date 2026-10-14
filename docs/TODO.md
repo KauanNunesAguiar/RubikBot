@@ -1,0 +1,520 @@
+# TODO — Cubo Mágico STM32F4VE (Kociemba + TFT + W25Q16) + Bancada de visão
+
+**Legenda:** `[x]` feito · `[ ]` pendente · `[ ] **(parcial)**` em andamento
+**Tags:** `[MVP]` necessário para o primeiro ciclo funcionando · `[AFINAR]` só depois do MVP
+As etapas estão em **ordem crescente de execução** (0 a 8C concluídas; 9 a 19 pendentes).
+
+## Índice
+
+- [Etapas concluídas (0 a 8C)](#etapas-concluídas)
+- [Objetivo, nomenclatura e decisões](#objetivo-nomenclatura-e-decisões-fixadas-v2)
+- [Etapas pendentes (9 a 19)](#etapas-pendentes)
+- [Configuração da bancada](#configuração-da-bancada-benchconfigh)
+- [Diagnóstico atual](#diagnóstico-atual-logs-recentes)
+- [Confiabilidade](#confiabilidade-itens-pendentes)
+- [Regras de trabalho](#regras-de-trabalho)
+
+---
+
+# Etapas concluídas
+
+## ETAPA 0 — Ajustes iniciais e baseline `CONCLUÍDA`
+
+Objetivo: melhorias de menor risco e alto ganho para gerar um novo baseline.
+
+- [x] Escalonamento da Fase 2 (`_p2Max` com `CAP`)
+- [x] Filtro de repetição da Fase 1
+- [x] Tabela de combinações (`g_cnk`)
+- [x] SPI da flash em 42000000 Hz
+- [x] Otimização do compilador em `-O2`
+- [x] Verificação do clock do sistema (SYSCLK: 168000000 Hz, flash e poda OK)
+- [x] Selftest atualizado p/ mesmos parâmetros do HUD (30 giros de embaralho, maxDepth 26, timeout 60 s, refineMs 1500, seed fixa) + métricas por teste
+- [x] Rodar `RUN_SELFTESTS 1` e salvar o log como baseline
+
+**BASELINE OFICIAL** (seed 12345, 30 giros, maxDepth 26, refine 1500 ms):
+
+- 5/5 resolvidos · média 22 giros (22,23,23,23,22) · média 2567 ms
+- 1ª solução: 573 a 1673 ms · flash 34-35% do tempo, 2.39 us/leitura
+- cache simulado: acerto 9-10% (descartado) · poda OK · ID TFT 009341
+
+**BASELINE OFICIAL 2** (mesmos parâmetros; após corte antecipado h1 em `search2` + `multiplyP2` na fase 2):
+
+- 5/5 resolvidos · média 22 giros (22,23,23,23,22) · média 2300 ms
+- 1ª solução: 439 a 1211 ms · flash 32-33% do tempo, 2.41 us/leitura
+- cache simulado: acerto 10-12% (descartado) · poda OK · ID TFT 009341
+- Variação vs baseline 1 (2567 ms): **-10,4%**
+
+**BASELINE OFICIAL 3** (multi-seed, N=200, seed 2024, 30 giros, maxDepth 26, refine 1500 ms, `_p2Budget=30000`) — **REFERÊNCIA ATUAL DO SOLVER**:
+
+- 200/200 resolvidos · média 21,72 giros · média 3113 ms · mediana 2625 ms
+- p90 5403 ms · máximo 7996 ms · buscas >10 s: 0 · >7 s: 3
+- Obs.: a seed 12345 (5 cubos) subestima o caso típico; usar o sweep (N>=100) para comparar qualquer mudança de desempenho daqui em diante.
+
+## ETAPA 1 — Instrumentação e métricas `CONCLUÍDA`
+
+Objetivo: ferramentas de medição para embasar decisões técnicas.
+
+- [x] Struct de métricas globais (leituras de flash, nós por fase, tempos de flash, render, pushColors, FPS e mutex)
+- [x] Coleta de dados para dimensionar cache de poda em RAM
+  - **DECISÃO:** cache de poda em RAM **descartado** (simulação deu 9-15% de acerto em todos os testes; acessos à flash muito dispersos)
+
+## ETAPA 2 — Melhorias no solver `CONCLUÍDA`
+
+Objetivo: refinamentos lógicos e de desempenho no CubeCore.
+
+- [x] Busca por soluções mais curtas após a primeira, com limite de tempo (`refineMs`)
+- [x] Ajuste e medição do timing do FSMC (`pushColors`)
+- [x] Mapear erros do `verify()` para mensagens claras no HUD (`CubeSolver::verifyError` + `verifyErr()` no HUD; selftest 3 OK: r=-1 err=-5)
+- [x] Gancho `#if` de eventos (`SolverEvents.h`, `SOLVER_EVENTS=0` = custo zero)
+- [x] Remover `setAddrWindow` duplicado em `CubeView::render`
+- [x] Itens de confiabilidade (ver seção "Confiabilidade")
+
+## ETAPA 3 — Camada de input `CONCLUÍDA`
+
+Objetivo: padronizar e desacoplar dispositivos de entrada.
+
+- [x] `InputManager` (lib/Input): encoder, K0, K1 e touch viram eventos numa fila
+- [x] Simplificar pinos: debounce único por botão; pinos do encoder em `InputManager.h`
+- [x] Touch fora do HUD: HUD só recebe `onTouch(x,y)`
+- [x] K1 → `requestSolve` (antes não estava ligado) · K0 → scramble
+- [x] Modo manual: toque longo no encoder alterna VISTA/FACE
+  - VISTA: giro = câmera, clique = embaralhar
+  - FACE: giro = gira a face selecionada (horário/anti), clique = próxima face
+- [ ] **(parcial)** WKUP continua lido direto no `taskMetrics`: MANTIDO (coleta de dados do TCC); reavaliar em 8.9/8.10 (env:bench)
+  - Medido na época (words livres): input=308/384, dispatch=230/512 (ok); pilhas atuais: ver Etapa 5 (input 192)
+
+## ETAPA 4 — Reformulação do display `CONCLUÍDA`
+
+Objetivo: eliminar gargalos de concorrência na interface gráfica.
+
+- [x] Task única "display" dona do TFT (sem mutex: só ela desenha). Prio 1 p/ não tirar CPU do solver (antes o render também era prio 1)
+- [x] `Screen.h`: interface `Screen` + `ScreenManager` (troca feita dentro da task de display)
+- [x] `HudScreen`: `cube.update` + `hud.updateUI`; modo VISTA/FACE movido do main
+- [x] `DebugScreen` (stub; a Etapa 5 preenche)
+- [x] HUD sem mutex: `lock()/unlock()` vazios, `begin()` sem parâmetro, sem `uiTask`, `invalidate()`
+- [x] K0 longo = próxima tela; `canLeave()` bloqueia troca durante busca/execução
+- [x] `main.cpp`: remove `taskRender`, `tftMutex` e `handleInput` específico do HUD
+- [x] `TreeScreen` (visualização da árvore) → feita na Etapa 6
+
+Medido: 34 fps, quadro 10.24 ms (push 4.56 ms), busca 2115 ms (sem piora), pilha display 700/1024 livres; bloqueio de troca durante solve OK.
+
+## ETAPA 5 — Tela de debug `CONCLUÍDA`
+
+Objetivo: central de monitoramento em tempo real.
+
+- [x] `DebugScreen` completa (atualiza a cada 500 ms, só redesenha linhas que mudaram): heap FreeRTOS (livre/total/mín), RAM malloc, HUD (fps/quadro/push), solver (tempos f1/f2, nós, G1), flash (leituras, média, % do tempo, cache sim), pilhas livres/total de todas as tasks, eventos de input perdidos
+- [x] Limpeza das métricas de mutex (`Metrics.h` / `Metrics.cpp`)
+- [x] Ajustar pilhas (words). Medido em uso (usado = total − livre mínimo): display 324 · solve 471 · dispatch 284 · input 78 · led 23 · metrics 276 (492/768 livres, após WKUP)
+  - Novos totais: display 768, solve 768, input 192, led 128, metrics 512; dispatch 512 mantido. Economia ~5,3 KB de heap.
+  - Heap FreeRTOS: 119488 total, 16348 livre, mín = livre (nenhuma alocação em runtime)
+  - **VALIDADO** (words livres mín.): display 444/768, solve 311/768, dispatch 228/512, input 114/192, led 105/128, metrics 236/512 · heap livre 22716 B (+6,4 KB)
+- [x] Dump serial por WKUP: **MANTER** (útil p/ colar logs e coletar dados do TCC); reavaliar na Etapa 7
+
+## ETAPA 6 — Árvore de busca (foco no TCC) `CONCLUÍDA`
+
+Objetivo: visualizar o comportamento do algoritmo.
+
+- [x] Solver: eventos de nó/poda (`EV_P1_PRUNE`, `EV_P2_PRUNE`) + `S_RESET`/`S_END`
+- [x] `SolverEvents.h/.cpp`: `g_trace` = histograma por profundidade (nós e podas, F1/F2), caminho atual, ring de 64 eventos (16 bits cada). Flag: `-D SOLVER_EVENTS=1`
+- [x] `TreeScreen`: gráfico em escala log (nós/podas por profundidade), caminho atual, últimos eventos, taxa de poda por fase, ramificação efetiva, status da busca
+- [x] Automático: SOLVE abre a Árvore ao vivo e volta ao HUD ~1,2 s após a busca (`lingerMs` soma ao cronômetro do HUD; `autoReturn=false` desliga)
+- [x] Overhead dos eventos: RESUMO 2671 ms vs 2562 ms (+4,3%), mesmos 22 giros
+- [x] CORREÇÃO da "ramif" (F1 0.94 era inválida: misturava iterações repetidas). Agora: taxa de poda por fase + fator de ramificação efetivo da última iteração completa da F1 (N^(1/D), via `EV_P1_ITER`). Validado: ramif F1 3,14 (d10)
+- [x] Exportar histograma por profundidade (CSV) pela serial no dump do WKUP (`solverTracePrintCsv`). Validado no hardware.
+- [x] Corrigido wrap do DWT (32 bits, 25,57 s a 168 MHz): `phase2` mede por limite, não por chamada. Validado: F1 + F2 = total. Dados de tempo F1/F2 anteriores à correção são inválidos em buscas longas.
+
+Dados de referência (1 busca): F1 158243 nós / 146261 podas · F2 344540 nós / 294534 podas.
+**Dado para o TCC:** o tempo da busca varia de 2,4 s a 38 s conforme o G1 encontrado (a F1 é estável em 1-2 s; toda a variação vem da F2).
+
+## ETAPA 6B — Otimização do solver e varredura de budget `CONCLUÍDA`
+
+Objetivo: reduzir tempo médio e cauda de latência do solver, medindo cada passo.
+
+- [x] Corte antecipado em `search2`: lê h1 (cperm) e poda antes de ler h2 (udperm) — RESUMO 2399 ms vs 2567 ms (-6,5%), mesmos 22 giros; `us` caiu p/ ~36% de `cs`
+- [x] Testar ordem `us` antes de `cs` — 2426 ms vs 2399 ms, sem ganho; `cs` e `us` cortam os mesmos nós; mantida `cs→us`
+- [x] `multiplyP2` na fase 2 (ignora co/eo) — 2300 ms (-4,1% vs 2399; -10,4% vs baseline 1), 5/5, 22 giros
+- [x] `permRank` por máscara + popcount: **REVERTIDO** (experimento sem ganho) — 2315 ms vs 2300 ms; rank não é gargalo. Rank continua idêntico (poda OK). Conclusão: a computação restante está nas multiplicações de `CubieCube` e na estrutura da busca, não no rank.
+- [x] Cache de leitura da flash: descartado (acerto 9-15% simulado)
+- [x] Limite de nós por chamada de `phase2` (`_p2Budget`, métrica `p2cut`)
+  - Mecanismo: reinício em distribuição de cauda pesada (corta G1 caro e segue para o próximo). Conta os nós de todos os limites `lim` da chamada.
+  - Seed fixa (5 cubos) com 30000: +34% (amostra pequena, conclusão errada)
+- [x] Ferramenta de varredura automática (`env:sweep`, `src/sweep/sweep.cpp`): N cubos por budget, mesma seed (xorshift próprio), saída só com parâmetros e resultado por budget + ranking. Log gravado por `tools/sweep_log.py`
+- [x] Varredura N=200, seed 2024 (200/200 resolvidos em todos):
+
+| budget    | média    | mediana  | p90  | máx   | >10s | >7s | giros              |
+| --------- | -------- | -------- | ---- | ----- | ---- | --- | ------------------ |
+| 0         | 3999     | 3150     | 7162 | 19119 | 9    | 20  | 22,17              |
+| 300000    | 3934     | 3153     | 6853 | 18264 | 10   | 19  | 22,13              |
+| 150000    | 3767     | 3073     | 6505 | 21357 | 7    | 16  | 21,99              |
+| 80000     | 3477     | 2837     | 6186 | 14666 | 2    | 14  | 21,84              |
+| 50000     | 3357     | 2818     | 5969 | 9821  | 0    | 11  | 21,74              |
+| 37000     | 3227     | 2736     | 5748 | 9260  | 0    | 9   | 21,73              |
+| **30000** | **3113** | **2625** | 5403 | 7996  | 0    | 3   | 21,72 ← **MELHOR** |
+| 22000     | 3158     | 2739     | 5253 | 8718  | 0    | 5   | 21,70              |
+| 20000     | 3115     | 2784     | 4988 | 8310  | 0    | 5   | 21,68              |
+| 10000     | 3158     | 2756     | 5151 | 11506 | 2    | 5   | 21,63              |
+
+Fundo da curva entre 20000 e 30000 (-22% na média, máx 19119 → 7996 ms); 10000 já piora a cauda (corta G1 úteis). Qualidade das soluções melhora levemente com budgets menores. **Escolhido: `_p2Budget = 30000`.**
+**Lição metodológica p/ o TCC:** N=5 deu conclusão errada; N=200 corrigiu.
+
+## ETAPA 7 — Reorganização de libs, tipos e bitfields `CONCLUÍDA`
+
+Dado: `sizeof(CubieCube) = 40` (cp8+co8+ep12+eo12); `_cc[33]` = 1320 B, `g_m18` = 720 B.
+
+- [x] 7.1 Baseline de RAM/Flash e structs
+- [x] 7.2 Mapa de RAM: heap FreeRTOS 119488 B (canvas 80000 = 67%, livre 22716 B); .bss ~11,7 KB; CCM 64 KB sem uso. Sem pressão de RAM. Canvas em faixas: descartado (custo de `setAddrWindow`/re-raster sem necessidade).
+- [x] 7.3 Experimento B: `_cc` e `g_m18` na CCM RAM (0x10000000) **[MANTIDO, neutro]**
+  - sweep N=200 seed 2024 budget 30000: média 3119 ms (baseline 3113, +0,2%), mediana 2629, p90 5416, máx 8016, giros 21,72, ok 200/200. Dentro do ruído.
+  - `sizeof(CubeSolver)` 1460 → 144. Flash externa segue em 31% do tempo.
+  - Obs.: `_cc` fixo na CCM ⇒ só pode existir 1 `CubeSolver` por firmware.
+  - Nova referência do selftest (seed 12345, budget 30000): ~3100 ms, 5/5, 22 giros (os 2300 ms eram com budget ilimitado).
+- [x] 7.4 Experimento A (empacotar `CubieCube`): **SUSPENSO** por análise (economiza ~1 KB, sem cache de dados o acesso custa igual, shift/máscara no caminho quente). Reabrir só se quiser o resultado negativo medido para o TCC.
+- [x] 7.5 Rank mais barato: JÁ TESTADO na Etapa 6B (máscara+popcount, sem ganho) → encerrado
+- [x] 7.6 Reorganização de libs: estrutura Board / CubeCore / CubeUI / Screens / Input mantida (já coerente, sem mover arquivos). Limpeza feita:
+  - comentário do topo do `CubeHUD.h` atualizado (sem tftMutex/uiTask/patch)
+  - Dependência registrada: CubeCore → Board (`PruneTable.h` usa `W25Q16.h` e `Metrics.h`).
+  - Limpezas de comentário que sobraram (aviso PA7 em `InputManager.h` e erros no topo do `CubeHUD.h`): movidas para o item 18.4
+- [x] 7.7 Build final decidido:
+  - `RUN_SELFTESTS = 0` por padrão (liga com `-D RUN_SELFTESTS=1`); boot sem os ~15 s
+  - `SOLVER_EVENTS = 1` mantido (TreeScreen é o foco do TCC; overhead +4,3%)
+  - WKUP/`taskMetrics` mantido (coleta de dados para o TCC)
+
+## ETAPA 8 — Preparação no PC (sem hardware novo) `CONCLUÍDA`
+
+Objetivo: definir poses, sequência T e formatos de dados antes de ligar qualquer motor.
+
+- [x] 8.1 `BenchConfig.h` mínimo (`lib/Robot/src`): UARTs, SETTLE, janelas, CHECKPOINT, tentativas, timeouts, seeds (train ≠ test, ≠ 0), `PIN_SLAVE_TRIG` com `#error`. `benchPrintConfig()` imprime os valores efetivos. `static_assert` validados no PC e `pio run` do env principal OK (`stickerPerm` + `BenchConfig.h` compilam)
+- [x] 8.2 `tools/pose_sim`: valida T e faz busca IDDFS por janelas de pares opostos.
+  - **RESULTADO:** a T do exemplo (`B F' L R' U D' F B'`) é **INVÁLIDA** (8 das 24 facetas móveis da pose B repetem as da pose A). Não existe T com 1 a 4 janelas.
+  - **T ADOTADA** (5 janelas, custo 7 quartos de volta):
+    - `T  = D R2 L2 U D F B' R2 L'` (janelas: `D | R2 L2 | U D | F B' | R2 L'`)
+    - `T' = L R2 B F' D' U' L2 R2 D'`
+  - T·T' = identidade OK; centros fixos; cobertura 48/48 facetas móveis
+- [x] 8.3 `CubeState::stickerPerm(seq, perm[54])` (`perm[i]` = destino do adesivo i)
+- [x] 8.4 `poses.h` GERADO pelo `pose_sim` (`POSE_T_SEQ`, `POSE_A/B_FACELET`, `POSE_OF/IMG_OF_FACELET`, `poseOrient`/`CamOrient`) + `docs/poses.md`
+  - Decisões: câmera vê o canto URF (U,F,R); canônico = U(0-8) F(9-17) R(18-26); mapas referentes ao estado ANTES do T; orientação = rot/espelho da grade 3x3 de cada face.
+  - Pose B (j: facelet): U `38 41 44 37 4 30 36 39 42` · F `47 50 53 32 22 52 45 48 51` · R `33 43 27 34 13 28 35 46 29`
+- [x] 8.5 `docs/dataset.md` (nomes, sidecar JSON, CSV de resultados, chaves de junção)
+- [x] 8.6 `lib/Robot/src/Scrambler.h`: xorshift32, janelas (face única ou par oposto), eixos consecutivos diferentes, 15 combinações por eixo. Testado no PC (2000 × 15 janelas: determinismo, parser, eixos; 59% pares / 41% simples). **Falta só ligar ao ciclo DATAGEN (10.4)**
+
+**Critério:** T validada no PC (feito); formatos de dados escritos (feito).
+**Impacto:** T tem 5 janelas (não 4); considerar no tempo por trial (piloto 14.7) e no `BENCH_SETTLE_MS` (9.6).
+
+## ETAPA 8B — Reorganização do repositório (RubikBot) `CONCLUÍDA`
+
+- [x] Estrutura: `src/{master,actuator,flasher,sweep}`, `lib/Protocol` (`protocol.h` compartilhado Master↔atuador), `tools/pc` (C++ PC + `build.ps1`), `tools/py` (Python), `tables/ build/ logs/` fora do Git, `docs/`. Envs: master (padrão), flasher, sweep, actuator. Builds dos 4 envs e dos 3 programas de PC OK
+- [ ] Conferir que `ActuatorLink` compila de verdade (incluir o header no `main.cpp` temporariamente); só então o 9.5 fica provado
+- [ ] `README.md` curto na raiz (o que é cada env e cada ferramenta)
+
+## ETAPA 8C — Documentação (`docs/`) `CONCLUÍDA`
+
+- [x] `docs/README.md` (índice) + `architecture.md`, `cube_state.md`, `solver.md`, `prune_tables.md`, `protocol.md`
+- [x] Ajustes em `actuator_pins.md`, `poses.md`, `dataset.md`
+- [ ] Caminhos de comentário desatualizados: `actuator.cpp` (`protocol.h` está em `lib/Protocol`), `proto_test.cpp` e `pose_sim.cpp` (agora em `tools/pc/`), este arquivo (`tools/act_test.py`, `sweep_log.py` → `tools/py/`)
+- [ ] Conferir o fim da última tabela na flash: aqui consta `0x1EEE00` (18.10), o cálculo dá `0x1EE200`
+
+---
+
+# Objetivo, nomenclatura e decisões fixadas (v2)
+
+**OBJETIVO DO TCC:** escolher, entre as combinações Slave ML + câmera, a que será usada no produto final (1 slave + 1 câmera). Duas avaliações, depois comparadas:
+
+- **(A) OFFLINE:** inferência sobre uma database de imagens rotuladas, com medição de corrente por um medidor externo (sem o Master)
+- **(B) AO VIVO:** cada slave numa sessão com o Master (robô em malha fechada)
+
+A conclusão é a análise A × B e a escolha da combinação (Etapa 17).
+**Estratégia:** fazer o ciclo completo funcionar com 1 câmera e 1 slave (MVP) e só então escalar para 5 pares e fazer os afinamentos.
+
+## Nomenclatura
+
+- **Master:** JL-32F4VE 2.0 (STM32F407VET6): estado do cubo, embaralhamento, log
+- **Slave atuador:** STM32F103C8T6 (preferido; Arduino Mega só se faltar F103): 6 motores A4988, iluminação WS2812, ESTOP. Recebe comandos do Master pela UART
+- **Slave coletor:** 2º JL-32F4VE com acesso a várias câmeras (Etapa 14); no MVP a coleta usa 1 câmera, nativa do ESP32-CAM
+- **Slaves ML (pares):**
+  - ESP32-CAM + OV2640
+  - XIAO ESP32-S3 Sense + OV3660 (confirmar o sensor da unidade)
+  - JL-32F4VE + OV7670
+  - Arduino Nano 33 BLE Sense Lite + OV7675
+  - script Python + webcam (PC, serial com o Master; referência, sem energia)
+- **Medidor de corrente:** MCU externo + INA226 + SD (ou log serial no PC), fonte própria por slave
+
+## Decisões
+
+- Acurácia da visão = saída **BRUTA** do slave vs estado real. O Master **NÃO** repara.
+- **TREINO:**
+  1. base = treino ÚNICO no PC, um modelo por câmera, quantizado int8 e IGUAL em todos os MCUs (hash do modelo no log).
+  2. FUTURO (Etapa 19): treino/calibração no microcontrolador (edge AI do XIAO e do Nano 33), comparado com a base. A etapa 19 só começa depois da análise da base (Etapa 17)
+- Câmera vê 3 faces por foto; 2 poses FIXAS (cantos opostos); a troca de pose é uma sequência T de giros que não move os centros, só de PARES de faces opostas (a T do exemplo foi invalidada; adotada: `D R2 L2 U D F B' R2 L'`, ver 8.2)
+- Motores presos só aos centros por um conector que cobre parcialmente o adesivo central ⇒ o centro NÃO entra na acurácia. Acurácia sobre as **48 facetas MÓVEIS** (24 por pose, todas distintas se T funcionar); reportar também por foto (24) e "estado completo correto" (48/48)
+- Operador monta o cubo RESOLVIDO e encaixa cada motor no centro correto a cada troca de cubo. O Master só confere e registra FLAG; nunca descarta lote nem config
+- 5 cubos (Gan M365, MoYu WeiLong, Rubik's tile, plástico com adesivo comum, plástico com adesivo refletivo), esquema de cores IGUAL; mapeamento classe→face é uma constante única (U,R,F,D,L,B). Cadastro por cubo: `cube_id`, tom, superfície
+- Divisão treino/teste por **TRIAL** (nunca por imagem nem por faceta): as 2 poses, as câmeras e as luzes do mesmo trial ficam do mesmo lado. 70/30 (ou 60/40, a definir) + validação cruzada por cubo (deixa 1 cubo de fora) como análise secundária
+- Imagens salvas SEM compressão (RGB565/YUV; OV7670/OV7675 não têm JPEG) + sidecar com metadados. Registradores FIXOS (exposição, ganho, balanço de branco), resolução e enquadramento padronizados por câmera
+- SD: o Master só guarda o log; cada slave tem o SD próprio (sem SD compartilhado); a junção é no PC pelo `trial_id`
+- Energia SEMPRE pelo medidor externo (fases marcadas, lotes de N, base ociosa), mesma montagem em A e B. O Master NÃO lê INA226. A energia de A não inclui a leitura do SD
+- Tempos: UART com carimbo de fim de quadro + tempos internos do slave. EXTI/DWT de 6 ns e analisador lógico ficam como `[AFINAR]`
+- Mux serial aceito só durante os testes (produto final = 1 slave)
+- Câmeras lado a lado não eliminam o viés de posição: registrar a posição de cada uma e girar as posições a cada cubo (quadrado latino 5×5)
+- Upload: serial (DFU descartado); sem ST-Link; CH340 só para serial
+- K1 no modo bancada = "pronto/pausa"; no modo APP continua "resolver"
+- Critérios da conclusão são fixados ANTES de olhar os resultados (17.1)
+- TUDO que está aberto é configurável por `#define` (`BenchConfig.h`, cresce por etapa)
+
+## Marcos (a ordem das etapas já segue esta ordem)
+
+| Marco | Etapa | Entrega                                                               |
+| ----- | ----- | --------------------------------------------------------------------- |
+| M1    | 9     | robô gira o cubo por comando, sem perder passo                        |
+| M2    | 10    | primeiras fotos rotuladas (1 câmera, 2 poses), conferidas por overlay |
+| M3    | 11    | primeiro modelo treinado no PC com acurácia medida (baseline v0)      |
+| M4    | 12    | mesmo modelo rodando no ESP32-CAM sobre a database, acurácia ≈ PC     |
+| M5    | 13    | ciclo fechado ao vivo: embaralha → foto → RESULT → compara com o real |
+| M6    | 14    | database completa congelada (5 câmeras, 5 cubos, 3 luzes)             |
+| M7    | 15    | avaliação offline completa dos 5 slaves com energia                   |
+| M8    | 16    | avaliação com o Master dos 5 slaves                                   |
+| M9    | 17    | análise comparativa e escolha da combinação final                     |
+
+---
+
+# Etapas pendentes
+
+## ETAPA 9 — Atuador e motores `PENDENTE` (M1)
+
+Objetivo: o robô gira o cubo por comando. Controle simples primeiro; rampa e ISR depois.
+
+- [x] 9.1 `docs/actuator_pins.md` CONFIRMADO: F103C8T6 (STEP PA0/1/4/5/6/7, DIR PB0/1/10/11/12/13, EN comum PB14, MS1-3 PB5/6/7, USART2 PA2/PA3, WS2812 PA8, ESTOP PB8, LED PC13)
+- [ ] 9.2 Hardware (precisa de bancada)
+- [ ] **(parcial)** 9.3 `src/actuator/actuator.cpp` + `env:actuator` (bluepill_f103c8): TIM2 gera pulsos (ISR, BSRR em GPIOA), janelas de 1 ou 2 eixos opostos, velocidade constante `ACT_STEP_HZ=600` (escalada pelo microstep), `ACT_DIR_INVERT` por eixo, EN solto no boot, ESTOP (botão PB8 + comando), watchdog 1 s, `MOVE_WINDOW` idempotente (id repetido reenvia o DONE), microstep por comando. LIGHT é stub (9.7). `tools/act_test.py` testa sem motores.
+  - **Falta:** `pio run -e actuator`, gravar e rodar a tabela de testes
+- [x] 9.4 `protocol.h` + `tools/proto_test`: TUDO OK (CRC, ida e volta, bit trocado, lixo, estouro, fuzz 2e6 bytes: 0 aceitos)
+- [x] 9.5 `ActuatorLink` compila (`pio run` OK). Teste real: com o atuador (9.3)
+  - Regras para o Controller (10.4/18.2): chamar `enable(true)` no início de cada sessão (zera a memória de ids do atuador) e `ping` a cada `BENCH_ACT_PING_MS` (300) enquanto ocioso, senão o watchdog (1 s) solta os motores
+- [ ] 9.6 `[MVP]` Calibração com o MDF cortado: jog por face (serial), passos por 90 graus (inteiro), velocidade máxima com ~30% de margem, torque, folga do conector dos centros, `BENCH_SETTLE_MS` (vibração)
+- [ ] 9.7 `[MVP]` Iluminação v0: anéis WS2812 (48 LEDs) em brilho FIXO (preset SCAN), 5 V separado, 1000 uF, 330 ohm no DIN, GND comum, level shifter 3,3→5 V (74AHCT125). No F103: timer+DMA; se bit-bang, atualizar só com motores PARADOS (o bit-bang desliga interrupções ~1,5 ms e perde passos)
+- [ ] 9.8 `[MVP]` Teste de resistência: 200 giros aleatórios e retorno ao RESOLVIDO (o solver do Master resolve de volta; conferir visualmente) sem perda de passo
+
+**Critério (M1):** 9.8 passa 3 vezes seguidas.
+
+## ETAPA 10 — Primeira captura rotulada (dataset v0) `PENDENTE` (M2)
+
+Objetivo: 1 câmera, 1 slave (ESP32-CAM nativa, tem câmera e SD), 1 cubo, luz fixa. O dataset v0 é piloto: serve para provar o fluxo, pode ser descartado.
+
+- [ ] 10.1 `[MVP]` Enlace Master ↔ slave ML: UART dedicada (`LINK_ML_UART`; USART6 PC6/PC7 fica livre agora que o Master não comanda motores, conferir no esquemático; alternativa USART3), TRIG (`PIN_SLAVE_TRIG`), 3,3 V, GND comum. ESP32-CAM: UART0 é a do upload/log, conferir qual UART está livre
+- [ ] 10.2 `[MVP]` Comandos mínimos (mesmo `protocol.h`): `HELLO` (MCU, sensor lido do chip, resolução, formato, hash do firmware/modelo, boot_id), `SET_TRIAL` (trial_id, cube_id, luz, seed), `CAPTURE(pose, 27 rótulos canônicos)` → `CAPTURE_ACK` (exposição acabou: pode mover) → `SAVED(ok/erro)`; `PING`. O tempo de gravação NÃO entra no tempo medido
+- [ ] 10.3 `[MVP]` Firmware ESP32-CAM v0: registradores fixos, grava `.raw` + sidecar no SD, aplica a orientação da câmera aos rótulos
+- [ ] 10.4 `[MVP]` Master: ciclo DATAGEN: embaralha (8.6) → CAPTURE pose A → T (8.2) → CAPTURE pose B → repete. Só captura com motores parados e `BENCH_SETTLE_MS` vencido. Log pela serial com `tools/bench_log.py` (derivado do `sweep_log.py`)
+- [ ] 10.5 `[MVP]` Timeout/travamento do slave = falha registrada; o ciclo segue
+- [ ] 10.6 `[MVP]` `tools/dataset_check.py` (PC): overlay das 24 ROI sobre a imagem com o rótulo; calibrar as ROI (24 recortes fixos por foto) da câmera
+
+**Critério (M2):** 20 trials seguidos com imagens e rótulos corretos no overlay.
+
+## ETAPA 11 — Treino único no PC (baseline v0) `PENDENTE` (M3)
+
+Objetivo: provar que as imagens do dataset v0 são classificáveis. Começar simples.
+
+- [ ] 11.1 `[MVP]` `tools/ml/`: carregador do dataset (divisão por trial), recorte das 24 facetas móveis por foto pelas ROI, classificador mais simples primeiro (cor média em HSV/Lab + MLP pequena); só subir a complexidade se a acurácia for insuficiente
+- [ ] 11.2 `[MVP]` Métricas: acerto por faceta (48 móveis), por foto (24), estado completo (48/48), matriz de confusão por cor, por luz e por cubo
+- [ ] 11.3 `[MVP]` Quantização int8 + export (TFLite / vetor C) e ORÇAMENTO COMUM do modelo (arena de tensores e flash) que o MENOR MCU suporta (F407 ou Nano). Hash do modelo
+- [ ] 11.4 `[MVP]` Salvaguarda: seeds, versões e scripts guardados; modelo v0 e acurácia v0 = baseline de comparação para tudo que vier depois
+- [ ] 11.5 Python + webcam: roda o MESMO modelo no PC (referência de acurácia)
+
+**Critério (M3):** acurácia por faceta ≥ meta que você definir (ex.: 95%) no teste do v0.
+
+## ETAPA 12 — Inferência no microcontrolador sobre a database `PENDENTE` (M4)
+
+Objetivo: o mesmo modelo rodando no ESP32-CAM, lendo imagens do SD. Sem medidor ainda.
+
+- [ ] 12.1 `[MVP]` `ml_runner` comum (interface: carregar modelo, rodar sobre um buffer de imagem, tempo por fase: ler / pré-processar / inferir, GPIO de marcação por fase para o medidor). Port inicial para o ESP32-CAM
+- [ ] 12.2 `[MVP]` Modo OFFLINE: lê as imagens da database no SD, escreve CSV de resultados no próprio SD (facetas, confiança, tempos, flags)
+- [ ] 12.3 `[MVP]` Validação do port: acurácia no MCU = acurácia no PC dentro da diferença da quantização
+- [ ] 12.4 `[MVP]` RAM de pico, arena e flash reais registrados
+
+**Critério (M4):** 12.3 passa.
+
+## ETAPA 13 — Ciclo fechado v0 com o Master (1 slave ao vivo) `PENDENTE` (M5)
+
+Objetivo: embaralha → foto → resultado → compara com o estado real, sem intervenção.
+
+- [ ] 13.1 `[MVP]` Resposta em 2 estágios: `CAPTURE_ACK` (pode mover) e depois `RESULT` (assíncrono): 27 facetas em ordem da imagem, classe de COR 0..5 ou 7 = desconhecida (obrigatório), confiança opcional, flags de qualidade, tempos internos (captura, pré-processamento, inferência, em us), RAM de pico. `BENCH_RESULT_TIMEOUT_MS` / `BENCH_ACK_TIMEOUT_MS`
+- [ ] 13.2 `[MVP]` Master em modo EVAL v0: embaralha → A → T → B → RESULT A e B → converte pelo mapa 8.3 → compara com o `CubeState` real → log (acerto por faceta e estado completo). `fromFacelets`/`verify` só como flag
+- [ ] 13.3 `[MVP]` Política de erro SEM reparo: retry só por causas independentes do estado real (timeout, erro de protocolo, classe 7 numa faceta que devia ser lida, `fromFacelets`/`verify` inválidos). Em EVAL NÃO se repete por divergência com o estado conhecido (seria usar o gabarito). Até `BENCH_MAX_ATTEMPTS` (3) no MESMO item (só o CAPTURE da pose, cubo parado); 3 falhas = `ERRO_3X` e segue
+- [ ] 13.4 `[MVP]` Métricas separadas: acerto da 1ª tentativa (principal, é o bruto), acerto com retry, nº médio de tentativas, taxa de `ERRO_3X`
+
+**Critério (M5):** 50 trials seguidos, sem travar, com as métricas calculadas.
+
+## ETAPA 14 — Coleta completa de dados (database v1) `PENDENTE` (M6)
+
+Objetivo: 5 câmeras, 5 cubos, 3 luzes, rodando sem supervisão por horas/dias.
+
+- [ ] 14.1 Slave coletor (2º JL-32F4VE) com várias câmeras no DCMI: buffers tri-state (74LVC244/245) com OE por câmera, mux I2C (TCA9548A: OV2640 e OV3660 usam o mesmo endereço), XCLK comum, câmeras sempre LIGADAS (sem PWDN, para manter a exposição estável). Conferir no CSV de pinagem o conflito DCMI × SDIO (PC8-PC12) e PA6 (LED D2); níveis de I/O e reguladores de cada módulo. A webcam entra pelo script Python no PC, não por este slave
+- [ ] 14.2 Enquadramento padrão (cubo ocupa a mesma % do quadro), foco, registradores fixos por câmera documentados; posições das câmeras em quadrado latino 5×5 (gira a cada troca de cubo); registrar a posição no sidecar
+- [ ] 14.3 Firmware do coletor: seleciona a câmera, aplica a orientação (8.4), salva no SD dele; os outros slaves (ESP32-CAM, XIAO, Nano) só entram se coletarem pelo caminho nativo (ver 17.3)
+- [ ] 14.4 Luz: 3 níveis (presets do atuador, ordem sorteada DENTRO de cada cubo), aquecimento do LED (`BENCH_LED_WARMUP_S`), brilho FIXO durante a captura e sem atualizar durante ela. Nível = lux MEDIDO (BH1750 no Master, I2C: conferir pinos; PB6/PB7 são NRF24, alternativa PB8/PB9 se o NRF24 não estiver plugado; evitar PB10/PB11 da UART). Câmara de MDF fosca/preta por dentro
+- [ ] 14.5 Checkpoints de rótulo (motores em malha aberta: um passo perdido corrompe os rótulos seguintes): a cada `CHECKPOINT_EVERY` trials o Master resolve de volta com o solver, captura e verifica COR UNIFORME por face (regra simples, sem modelo). Trials do bloco ficam em QUARENTENA: se o checkpoint falhar, o bloco é descartado. Depois do treino, revisar imagens em que o modelo discorda do rótulo
+- [ ] 14.6 Fluxo de troca de cubo: fim do lote → resolvido → Master solta os motores (EN=1) e avisa no HUD/serial → operador troca o cubo, encaixa os 6 motores, informa o `cube_id` (encoder/touch) e aperta K1 = "pronto" → verificação inicial só como flag (lote SUSPEITO se falhar; nunca bloqueia)
+- [ ] 14.7 Piloto de `BENCH_PILOT_TRIALS` (5) por célula: mede o tempo real por trial e a taxa de falhas; só então projetar horas e confirmar `DATASET_TRIALS_PER_CELL`
+- [ ] 14.8 Retomada simples: o índice do trial vem do log; religar e continuar (o diário na flash é `[AFINAR]`, ver 18.x)
+- [ ] 14.9 `tools/merge_dataset.py` (PC): junta os cartões por `trial_id`, valida contagens, gera manifest com hash, congela a database v1, o split fixo por trial (70/30) e os folds por cubo
+
+**Critério (M6):** database v1 congelada, sem bloco em quarentena pendente.
+
+## ETAPA 15 — Medidor de corrente e avaliação offline completa (A) `PENDENTE` (M7)
+
+Objetivo: 5 slaves rodando a inferência sobre a database v1 em paralelo, cada um com fonte, SD e medidor próprios, sem o Master.
+
+- [ ] 15.1 Medidor: MCU externo + INA226 (+ SD ou log serial no PC), fonte própria por slave, Wi-Fi/BT desligados, clock fixo, mesma tensão e mesmo ponto de medição em todos. INA226 amostra a centenas de us: medir em LOTES de N imagens com pulsos de marcação (início/fim do lote e das fases) + linha serial com o id do lote; energia ATIVA = total − base ociosa (`BENCH_IDLE_BASELINE_S` = 30 s)
+- [ ] 15.2 Fases marcadas: ler SD, pré-processar, inferir. Energia reportada = pré-processamento + inferência (sem a leitura do SD, que não existe no produto)
+- [ ] 15.3 Treino único no PC (um modelo por câmera) sobre o split congelado e deploy nos demais MCUs: XIAO ESP32-S3 (esp-nn), JL-32F4VE (CMSIS-NN), Nano 33 BLE (CMSIS-NN); mesmo modelo/hash em todos, dentro do orçamento comum (11.3)
+- [ ] 15.4 Fatorial MCU × câmera: cada MCU roda o dataset de cada câmera (com o modelo treinado para ela). Registra acurácia, latência por fase, energia, RAM e flash
+- [ ] 15.5 Repetições da inferência por imagem para estabilizar tempo e energia (número a definir); scripts de junção dos CSVs (slave + medidor)
+- [ ] 15.6 Python + webcam: acurácia e tempo no PC como referência (sem energia)
+
+**Critério (M7):** tabela completa MCU × câmera com acurácia, latência e energia.
+
+## ETAPA 16 — Avaliação ao vivo com o Master (B) `PENDENTE` (M8)
+
+Objetivo: cada slave em uma sessão com o Master, com plano fixo e log oficial no SD.
+
+- [ ] 16.1 Plano gerado OFFLINE no PC (Python): estados-alvo aleatórios válidos, janelas (pares opostos), todo plano termina RESOLVIDO; seeds de TESTE diferentes das de TREINO (`BENCH_SEED_TRAIN != BENCH_SEED_TEST`); versão, seed, hash dos parâmetros e CRC; o Master recusa plano de hash diferente. MESMO plano para todos os slaves (amostras PAREADAS)
+- [ ] 16.2 Teste do SD do Master ISOLADO (`env:sdtest`, biblioteca STM32SD): montar, escrever 1 MB, pior latência, cartão ausente. Atenção: `SD_CARD_CD` e `SD_CARD_DAT3` estão ambos em PC11; conferir o esquemático
+- [ ] 16.3 Log CSV oficial no SD do Master (task "log", prio 1, fila em RAM, nunca no caminho do atuador): cabeçalho com os parâmetros efetivos; por linha: trial, tentativa, `session_id`, cfg (HELLO), cubo, luz (lux), seed, estado real, saída bruta, flags, tempos (TRIG→ACK, TRIG→RESULT, internos, RTT), timeouts, versão do plano e do firmware
+- [ ] 16.4 SESSÃO = 1 slave conectado (UART fixa, cabo trocado à mão; o mux só se quiser os 5 numa sessão). Tela "Sessão" no HUD: escolhe `config_id` e `session_id`; o Master compara com o HELLO (MCU, sensor, formato, hash do modelo) e BLOQUEIA se divergir
+- [ ] 16.5 Energia: o mesmo medidor externo da Etapa 15, com os pulsos TRIG→DONE por trial vindos do slave e a base ociosa medida no início da sessão
+- [ ] 16.6 Amostra: `BENCH_TRIALS_PER_CELL` = 50 por (slave × cubo × luz) = 750 por slave e 3750 no total (revisar após o piloto 14.7). Ordem das configs entre sessões sorteada; cubos sorteados dentro da sessão (troca manual é cara); luzes sorteadas dentro de cada cubo
+- [ ] 16.7 Controle de deriva: bloco de `BENCH_CONTROL_TRIALS` (10) trials do plano com cubo de referência e luz fixa no início de cada sessão, marcados "controle"; CSV com data/hora, lux, temperatura se houver sensor
+- [ ] 16.8 Flags (NÃO alteram o resultado bruto): 8 facetas móveis por cor (48/6), centros iguais nas duas poses, verificação de cor uniforme no início e fim do lote (lote SUSPEITO). `fromFacelets`/`verify` devolvem QUAL peça falhou (índice)
+- [ ] 16.9 Pausa/retomada pelo operador (K1) com carimbo "interrompido por operador" no CSV, para não contaminar tempos
+
+**Critério (M8):** 5 sessões completas, CSV íntegro, sem bloco suspeito sem explicação.
+
+## ETAPA 17 — Análise comparativa e conclusão `PENDENTE` (M9)
+
+- [ ] 17.1 Critérios de decisão FIXADOS antes de ver os resultados: acerto por faceta e estado completo, latência por fase, energia por inferência, RAM/flash, robustez por cubo e luz. Apresentar a fronteira de Pareto em vez de um "melhor" único, com as restrições do produto (custo, tamanho)
+- [ ] 17.2 Estatística pareada: Friedman/Wilcoxon (tempos), McNemar (acerto), regressão logística com MCU, câmera, luz e cubo como fatores (só estimável em A, onde o fatorial é completo); Dunn com Holm no lugar de Tukey após Kruskal-Wallis; intervalo de confiança do "estado completo" é largo (~±8 a 14 p.p. com 50 trials, estimativa): agregar sobre cubos e luzes
+- [ ] 17.3 Comparação A × B: diferença de acurácia por config (database × ao vivo), consistência do ranking (Spearman) e efeito do caminho de captura nativo (drivers e registradores diferentes do coletor)
+- [ ] 17.4 Escolha da combinação final e justificativa
+- [ ] 17.5 Limitações a citar: WS2812 "branco" = R+G+B (CRI ruim); câmeras lado a lado (paralaxe, FOV); MCU e sensor confundidos em B; modelo igual em todos; corrigir "quatro" cubos para cinco; combinações MCU × sensor fisicamente possíveis (OV7670/OV7675 exigem barramento paralelo/DCMI)
+
+## ETAPA 18 — Afinamentos do Master, do atuador e do solver `AFINAR`
+
+Só depois do MVP funcionando (M5). Cada item entra quando incomodar ou quando a Etapa 16 exigir.
+
+- [ ] 18.1 Atuador: ISR com rampa trapezoidal e prioridade ACIMA de `configMAX_SYSCALL_INTERRUPT_PRIORITY` (sem API do FreeRTOS), timer parado sem movimento, ESTOP por EXTI, EN ligado durante o escaneamento, parâmetros em struct persistente, medir jitter e latência da ISR
+- [ ] 18.2 Controller (`lib/Robot`) completo: máquina de estados sem tela (IDLE, SCAN, ASSEMBLE, VERIFY, SOLVE, EXECUTE, VERIFY_FINAL, ERROR, ESTOP), modos DATAGEN/EVAL/APP, task "ctrl" prio 2, CubeHUD como "view"; interface `MoveSink` (CubeView e executor do atuador, uma só fila, animação segue `progress()`)
+- [ ] 18.3 IWDG alimentado pela ctrl, INICIADO DEPOIS dos selftests do boot (com `RUN_SELFTESTS=1` levam ~15 s); HardFault handler que imprime PC/LR/CFSR/BFAR e guarda em backup SRAM; ler `RCC_CSR` no boot
+- [ ] 18.4 Limpezas:
+  - aviso acima de `ENCODER_SW` em `InputManager.h` (PA7 também é LED_D3)
+  - topo do `CubeHUD.h` (".conco" sobrando, "pilha 1536 words" → 768, "MISTURA / RESOLVE" → SCRAMBLE / SOLVE)
+  - include do `Adafruit_NeoPixel` no `main.cpp` e no `lib_deps` do `env:flasher`
+  - macro `metricsLock`
+  - comentário "fila até 32" (`QSIZE` é 64) no `CubeView.h`
+- [ ] 18.5 Orçamento de heap (hoje 22,7 KB livres): mover pilhas/TCBs para a CCM com `xTaskCreateStatic`; buffers de DMA e do SD na SRAM principal (a CCM não é acessível por DMA) e NENHUM buffer de DMA/SD na pilha de task na CCM. Meta: ≥ 8 KB livres de mínimo
+- [ ] 18.6 Log de produção não bloqueante (checar `availableForWrite`) e níveis de log
+- [ ] 18.7 `env:bench`: `SOLVER_EVENTS=0`, sem animação, tela só com contadores. Com `SOLVER_EVENTS=0` NÃO chamar `hudScreen.setAutoTree` e NÃO registrar o `TreeScreen` (senão a busca deixa o usuário preso na tela de aviso). Reavaliar o WKUP/`taskMetrics`
+- [ ] 18.8 `env:native` (PC) com testes de `CubeState`/`CubieCube`/`verify`, `Coords`, planner de passos e parser do protocolo (fuzz). `CubeSolver`/`PruneTable` ficam FORA (dependem de `W25Q16`, `Arduino.h` e `CCM_RAM_BASE`)
+- [ ] 18.9 Assinatura das tabelas na flash externa (magic+versão+CRC) em `0x1FF000`; checar no boot (hoje tabela apagada = poda 15 = busca até 60 s sem aviso). Layout das tabelas em UM header gerado (hoje duplicado em `PruneTable.h` e `flash_tables.py`) + `tools/gen_config.py` (extrai os `#define` do `BenchConfig.h` para JSON)
+- [ ] 18.10 Diário de retomada na flash externa `0x1EF000..0x1FEFFF` (as tabelas terminam em `0x1EEE00`, folga de 512 B — _conferir: o cálculo dá `0x1EE200`, ver 8C_): índice do plano, contadores, `session_id`, `config_id`; com outra config o Master avisa e exige nova sessão
+- [ ] 18.11 Buzzer (`PIN_BUZZER`, `BENCH_BUZZER_ENABLE`): padrões para TROCAR CUBO, LOTE OK, `ERRO_3X`/falha de slave, ESTOP, AGUARDANDO SLAVE, fim da bateria; nunca em PA7; silenciável (rodar à noite). Estado "AGUARDANDO SLAVE" não é falha
+- [ ] 18.12 Linhas físicas TRIG/ACK/DONE/RST com EXTI e `DWT->CYCCNT` na ISR (resolução de 6 ns, intervalos < 25 s por causa do wrap de 32 bits); PING com RTT; analisador lógico barato (clone 24 MHz, 8 canais) para provar o tempo medido; chave de alimentação do slave (`PIN_SLAVE_PWR`) para power-cycle
+- [ ] 18.13 Slave simulado em Python (cubos, falhas, travamentos, CRC ruim injetados); vetores de teste CRC/COBS compartilhados C++/Python; `docs/slave_wiring.md` com o conector padrão (TX, RX, TRIG, ACK, DONE, RST, 3V3, GND) e `docs/rt_budget.md` (prioridades NVIC e das tasks)
+- [ ] 18.14 Solver: micro-benchmark DWT; refinamento com tempo total = busca + giros × `t_giro`; F1 por coordenadas incrementais (tabelas de movimento na flash interna ~166 KB: twist 78732 + flip 73728 + slice 17820 B); poda em 2 bits (`cperm_sp` ~241 KB) só se sobrar flash interna; cada experimento isolado no sweep N=200, manter só ganho > 2%.
+  - **Descartados:** `fs` antes de `ts`, pré-filtro em RAM, cache em RAM, empacotar `CubieCube`
+  - Dado: ~69% do tempo é CPU e ~31% é flash externa
+- [ ] 18.15 SWD opcional: clone de ST-Link V2 (CH340 não faz SWD). DFU testado e descartado; CH340 = segunda UART de log e upload dos ESP32-CAM
+
+## ETAPA 19 — Treino/calibração no microcontrolador (edge AI) `FUTURO`
+
+Só depois da Etapa 17 (a base com treino único no PC fica como salvaguarda).
+
+- [ ] 19.1 XIAO ESP32-S3 e Nano 33 BLE Sense Lite: treino ou calibração embarcada (algoritmo a definir: calibração de cor, k-NN, ajuste fino da última camada)
+- [ ] 19.2 Medir a corrente do treino/calibração SEPARADA da inferência
+- [ ] 19.3 Comparar com a base do PC (mesmo split, mesmos critérios de 17.1)
+- [ ] 19.4 A análise principal continua sendo a da base; o resultado embarcado entra como extensão
+
+---
+
+# Configuração da bancada (`BenchConfig.h`)
+
+_Defaults provisórios._ Todos com `#ifndef` (sobrescrevíveis por `-D` no `platformio.ini`). Pinos do Master em `stm32f4ve_peripherals.h`; pinos do atuador em `docs/actuator_pins.md`. Os valores efetivos vão no CSV e no plano.
+
+| Item                                | Define                             | Default                                                    |
+| ----------------------------------- | ---------------------------------- | ---------------------------------------------------------- |
+| UART do atuador (lado do Master)    | `LINK_ACT_UART` / `_BAUD`          | USART3 / 115200                                            |
+| UART dos slaves ML (lado do Master) | `LINK_ML_UART` / `_BAUD`           | USART6 (PC6/PC7), a conferir / 115200                      |
+| TRIG para o slave ML                | `PIN_SLAVE_TRIG`                   | PENDENTE                                                   |
+| I2C (BH1750)                        | `I2C_SDA_PIN` / `I2C_SCL_PIN`      | PENDENTE _(pino PENDENTE com a feature ligada = `#error`)_ |
+| Cubos / níveis de luz               | `BENCH_N_CUBES` / `_LIGHT_LEVELS`  | 5 / 3 (a definir)                                          |
+| Dataset: trials por célula          | `DATASET_TRIALS_PER_CELL`          | 100 (a definir)                                            |
+| Split treino                        | `DATASET_TRAIN_PCT`                | 70 (ou 60, a definir)                                      |
+| Ao vivo: trials por célula          | `BENCH_TRIALS_PER_CELL`            | 50                                                         |
+| Piloto                              | `BENCH_PILOT_TRIALS`               | 5                                                          |
+| Seeds treino × teste                | `BENCH_SEED_TRAIN` / `_TEST`       | 1001 / 2002 (`static_assert(TRAIN != TEST)`)               |
+| Janelas por embaralhamento          | `BENCH_SCRAMBLE_WINDOWS`           | 15 (a definir)                                             |
+| Checkpoint de rótulo                | `CHECKPOINT_EVERY`                 | 20 (a definir)                                             |
+| Tentativas por item (13.3)          | `BENCH_MAX_ATTEMPTS`               | 3                                                          |
+| Aquecimento do LED                  | `BENCH_LED_WARMUP_S`               | 300                                                        |
+| Trials de controle por sessão       | `BENCH_CONTROL_TRIALS`             | 10                                                         |
+| Base ociosa de energia              | `BENCH_IDLE_BASELINE_S`            | 30                                                         |
+| Assentamento após giro              | `BENCH_SETTLE_MS`                  | 150 (calibrar no 9.6)                                      |
+| Timeout do RESULT / do ACK          | `BENCH_RESULT_TIMEOUT_MS` / `_ACK` | 5000 / 1000                                                |
+| Passos por 90 graus (no atuador)    | `STEPS_PER_QUARTER`                | 200 (microstep 1/4)                                        |
+
+**Derivados (constexpr):**
+
+- `DATASET_TRIALS_TOTAL = CELL × CUBES × LUZES`
+- `BENCH_TRIALS_PER_SLAVE = CELL × CUBES × LUZES`
+- `BENCH_TRIALS_TOTAL = PER_SLAVE × 5 slaves`
+
+**Estimativa (a revisar no piloto 14.7):** dataset = 1500 trials (3000 imagens por câmera); ao vivo = 750 trials por slave, 3750 no total.
+
+**Chaves de recurso:**
+
+| Chave                             | Uso                     | Default |
+| --------------------------------- | ----------------------- | ------- |
+| `BENCH_MODE_DATAGEN / EVAL / APP` | modo padrão de boot     | APP     |
+| `BENCH_ENABLE_BH1750`             | 14.4                    | 0       |
+| `BENCH_ENABLE_TIMING_LINES`       | EXTI por slave (18.12)  | 0       |
+| `BENCH_ENABLE_SLAVE_POWER_SWITCH` | `PIN_SLAVE_PWR` (18.12) | 0       |
+| `BENCH_BUZZER_ENABLE`             | 18.11                   | 0       |
+
+## Pendente de você (todos viram só troca de valor)
+
+- [ ] algoritmo do baseline (sugestão: cor média HSV/Lab + MLP pequena) e a meta de acurácia do M3
+- [ ] MCU do atuador (F103 × Mega) e MCU do medidor de corrente
+- [ ] sensor real do XIAO ESP32-S3 Sense (o HELLO lê o ID do chip)
+- [ ] split 70/30 ou 60/40; quantidade de trials por célula do dataset
+- [ ] nº de níveis de luz e pinos livres no esquemático (TRIG, I2C, UART dos slaves)
+- [ ] UART/pinos livres em cada slave ML
+
+---
+
+# Diagnóstico atual (logs recentes)
+
+- Flash externa: ~31-35% do tempo total (média 2,41 us por leitura)
+- Divisão de carga (1 busca típica): F1 ~1,1-2,4 s estável; F2 0,2 s a 16 s (cauda)
+- Soluções: 21,7 giros em média (N=200), faixa 18 a 25
+- Tempos (sweep, budget 30000): média 3,1 s, mediana 2,6 s, p90 5,4 s, máx 8,0 s
+- Render: ~21 a 34 FPS; quadro médio ~10,3 ms (~4,6 ms em `pushColors`/FSMC)
+- Pilhas livres mín. (words): display 442, solve 293-335, in 114, disp 228
+
+---
+
+# Confiabilidade (itens pendentes)
+
+- [x] Pilha da `taskEncoder` (256 → 512 words) + high-water mark das tasks (flag `-D INCLUDE_uxTaskGetStackHighWaterMark=1` no `platformio.ini`). Pilhas reduzidas na Etapa 5 e validadas.
+- [x] Corrida `solveStep` × `scramble`/`requestSolve` (`_solving` antes de baixar `_solveReq`) confirmado: botão do encoder durante "BUSCANDO" não causa nada nem erro
+- [ ] (baixa prioridade) `_msg`/`_err` lidos pela UI enquanto outra task escreve
+- [ ] (baixa prioridade) `isSolved()`/`stickersOk()` lidos durante `applyMove` (só cosmético)
+- [ ] (baixa prioridade) PA7 é `ENCODER_SW` e `LED_D3`: não usar o LED D3 com o encoder (aviso em `InputManager.h` ainda pendente: ver 18.4)
+- [ ] `_cc` fixo na CCM: só pode existir 1 `CubeSolver` por firmware
+- [ ] Heap: manter ≥ 8 KB livres de mínimo após as tasks novas (ver 18.5)
+
+---
+
+# Regras de trabalho
+
+- Enviar só trechos alterados (arquivo inteiro apenas se novo, mudança extensa ou se for requisitado).
+- Código alterado: mandar só a alteração (sem repetir o trecho removido); explicar por texto quando precisar.
+- Em tarefas por etapas: começar pelo TODO e ir marcando.
+- Testes são feitos pelo usuário (Claude instrui antes).
+- Ao ficar sem tokens: **PRIMEIRO** atualizar o TODO.

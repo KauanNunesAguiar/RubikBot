@@ -49,3 +49,5 @@ Colunas, nesta ordem:
 
 - Divisão treino/teste e folds por cubo ficam congelados em `split.csv` (trial_id, set, fold).
 - Acurácia: 48 facetas móveis (24 por pose); reportar também por foto (24) e estado completo (48/48).
+
+Poses, T e mapas de rótulos: poses.md.

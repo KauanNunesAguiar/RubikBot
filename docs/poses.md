@@ -1,6 +1,6 @@
 # Poses A e B
 
-Fonte da verdade numérica: `lib/Robot/src/poses.h` (gerado por `tools/pose_sim`). Este texto só explica.
+Fonte da verdade numérica: `lib/Robot/src/poses.h` (gerado por `tools/pc/pose_sim`). Este texto só explica.
 
 ## Conceito
 
@@ -11,6 +11,7 @@ Fonte da verdade numérica: `lib/Robot/src/poses.h` (gerado por `tools/pose_sim`
   T seguido de T' (`POSE_T_INV_SEQ`) é a identidade.
 - Centros: ficam parcialmente cobertos pelo conector do motor. Rótulo = `x` (ignorar);
   no RESULT o slave devolve 7 (desconhecida). Eles não entram na acurácia.
+- T adotada: D R2 L2 U D F B' R2 L' (5 janelas, 7 quartos de volta); T' = L R2 B F' D' U' L2 R2 D'.
 
 ## Ordem canônica das 27 posições (j)
 
@@ -42,4 +43,4 @@ A tabela fica no sidecar (`orient`) e no HELLO. Valores definidos na calibraçã
 
 ## Regenerar
 
-`pose_sim --out lib/Robot/src/poses.h` (usa `--search` para procurar outra T com menos janelas).
+`build/pc/pose_sim.exe --out lib/Robot/src/poses.h` (usa `--search` para procurar outra T com menos janelas).
