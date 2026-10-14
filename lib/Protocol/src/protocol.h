@@ -24,7 +24,9 @@ enum Type : uint8_t {
 	T_EN = 0x12,           // M->A: 1 liga motores, 0 solta
 	T_LIGHT = 0x13,        // M->A: preset (0 = apagado)
 	T_ESTOP = 0x14,        // M->A: para e solta EN
-	T_MICROSTEP = 0x15     // M->A: 1, 2, 4, 8 ou 16
+	T_MICROSTEP = 0x15,    // M->A: 1, 2, 4, 8 ou 16
+	T_JOG = 0x16,          // M->A: id, axis, steps (int16 LE, com sinal; passos crus no microstep atual) -> DONE
+	T_SPEED = 0x17         // M->A: hz (uint16 LE, frequência de passo referida ao microstep 1/4) -> STATUS
 };
 enum State : uint8_t { ST_IDLE, ST_MOVING, ST_ESTOP, ST_DISABLED, ST_WDOG };
 enum Result : uint8_t { R_OK, R_ESTOP, R_DISABLED, R_BUSY, R_BAD_ARGS };

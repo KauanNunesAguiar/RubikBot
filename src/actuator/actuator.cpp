@@ -24,7 +24,7 @@ static const uint32_t STEP_MASK = (1u << 0) | (1u << 1) | (1u << 4) | (1u << 5) 
 static const uint32_t DIR_PIN[6] = {PB0, PB1, PB10, PB11, PB12, PB13};
 static const uint32_t PIN_EN = PB14, PIN_MS1 = PB5, PIN_MS2 = PB6, PIN_MS3 = PB7, PIN_ESTOP = PB8, PIN_LED = PC13;
 
-static HardwareSerial link(PA3, PA2);  // USART2
+#define link Serial2
 static HardwareTimer* tim;
 
 /* ---------------- movimento (ISR) ---------------- */
@@ -60,6 +60,7 @@ static void isr() {
 
 /* ---------------- estado ---------------- */
 static uint8_t state = ST_DISABLED, err = 0, curId = 0, lastId = 0, lastRes = 0, light = 0, micro = 4, txSeq = 0;
+static uint16_t stepHz = ACT_STEP_HZ;  // base no microstep 1/4; mudada por T_SPEED
 static bool haveLast = false;
 static uint32_t lastRx = 0;
 static Parser parser;
@@ -127,7 +128,7 @@ static void applyMicrostep(uint8_t div) {  // A4988: 1=000 2=100 4=010 8=110 16=
 	digitalWrite(PIN_MS2, b);
 	digitalWrite(PIN_MS3, c);
 	micro = div;
-	tim->setOverflow(2u * ACT_STEP_HZ * div / 4u, HERTZ_FORMAT);  // mantém a velocidade angular
+	tim->setOverflow(2u * stepHz * div / 4u, HERTZ_FORMAT);
 }
 
 static bool estopPressed() { return digitalRead(PIN_ESTOP) == LOW; }
@@ -185,11 +186,51 @@ static void onMove(const Frame& f) {
 	tim->resume();
 }
 
+static void onJog(const Frame& f) {
+	if (f.len < 4) {
+		sendDone(0, R_BAD_ARGS);
+		return;
+	}
+	const uint8_t id = f.payload[0], axis = f.payload[1];
+	const int16_t steps = (int16_t)(f.payload[2] | (f.payload[3] << 8));
+
+	if (state == ST_MOVING) {
+		if (id != curId) sendDone(id, R_BUSY);
+		return;
+	}
+	if (haveLast && id == lastId) {
+		sendDone(lastId, lastRes);
+		return;
+	}
+	if (axis >= 6 || steps == 0) {
+		sendDone(id, R_BAD_ARGS);
+		return;
+	}
+	if (state == ST_ESTOP) {
+		sendDone(id, R_ESTOP);
+		return;
+	}
+	if (state != ST_IDLE) {
+		sendDone(id, R_DISABLED);
+		return;
+	}
+
+	digitalWrite(DIR_PIN[axis], (steps > 0 ? 1 : 0) ^ ((ACT_DIR_INVERT >> axis) & 1));
+	delayMicroseconds(5);
+	curId = id;
+	state = ST_MOVING;
+	haltMotion();
+	rem[axis] = (uint32_t)(steps > 0 ? steps : -steps);
+	tim->setCount(0);
+	tim->resume();
+}
+
 static void handle(const Frame& f) {
 	switch (f.type) {
 		case T_MOVE_WINDOW:
 			onMove(f);
 			return;
+
 		case T_EN:
 			if (f.len >= 1 && f.payload[0]) {
 				if (estopPressed()) {
@@ -204,12 +245,15 @@ static void handle(const Frame& f) {
 				stopAll(ST_DISABLED, R_DISABLED, 0);
 			}
 			break;
+
 		case T_ESTOP:
 			stopAll(ST_ESTOP, R_ESTOP, 1);
 			break;
+
 		case T_LIGHT:
 			if (f.len >= 1) light = f.payload[0];  // 9.7 liga isto aos WS2812
 			break;
+
 		case T_MICROSTEP:
 			if (state != ST_MOVING && f.len >= 1 &&
 			    (f.payload[0] == 1 || f.payload[0] == 2 || f.payload[0] == 4 || f.payload[0] == 8 ||
@@ -218,6 +262,25 @@ static void handle(const Frame& f) {
 			else
 				err = 3;
 			break;
+
+		case T_JOG:
+			onJog(f);
+			return;
+
+		case T_SPEED:
+			if (state != ST_MOVING && f.len >= 2) {
+				uint16_t hz = f.payload[0] | (f.payload[1] << 8);
+				if (hz >= 50 && hz <= 4000) {
+					stepHz = hz;
+					applyMicrostep(micro);
+				} else {
+					err = 3;
+				}
+			} else {
+				err = 3;
+			}
+			break;
+
 		default:
 			break;  // T_PING e desconhecidos: só responde STATUS
 	}

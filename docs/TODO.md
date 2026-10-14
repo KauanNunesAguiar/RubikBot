@@ -211,7 +211,7 @@ Objetivo: definir poses, sequência T e formatos de dados antes de ligar qualque
 - [x] `docs/README.md` (índice) + `architecture.md`, `cube_state.md`, `solver.md`, `prune_tables.md`, `protocol.md`
 - [x] Ajustes em `actuator_pins.md`, `poses.md`, `dataset.md`
 - [ ] Caminhos de comentário desatualizados: `actuator.cpp` (`protocol.h` está em `lib/Protocol`), `proto_test.cpp` e `pose_sim.cpp` (agora em `tools/pc/`), este arquivo (`tools/act_test.py`, `sweep_log.py` → `tools/py/`)
-- [ ] Conferir o fim da última tabela na flash: aqui consta `0x1EEE00` (18.10), o cálculo dá `0x1EE200`
+- [x] Fim da última tabela = `0x1EE200` (conferido: 0x178000 + 483.840 B).
 
 ---
 
@@ -284,12 +284,18 @@ Objetivo: o robô gira o cubo por comando. Controle simples primeiro; rampa e IS
 
 - [x] 9.1 `docs/actuator_pins.md` CONFIRMADO: F103C8T6 (STEP PA0/1/4/5/6/7, DIR PB0/1/10/11/12/13, EN comum PB14, MS1-3 PB5/6/7, USART2 PA2/PA3, WS2812 PA8, ESTOP PB8, LED PC13)
 - [ ] 9.2 Hardware (precisa de bancada)
-- [ ] **(parcial)** 9.3 `src/actuator/actuator.cpp` + `env:actuator` (bluepill_f103c8): TIM2 gera pulsos (ISR, BSRR em GPIOA), janelas de 1 ou 2 eixos opostos, velocidade constante `ACT_STEP_HZ=600` (escalada pelo microstep), `ACT_DIR_INVERT` por eixo, EN solto no boot, ESTOP (botão PB8 + comando), watchdog 1 s, `MOVE_WINDOW` idempotente (id repetido reenvia o DONE), microstep por comando. LIGHT é stub (9.7). `tools/act_test.py` testa sem motores.
-  - **Falta:** `pio run -e actuator`, gravar e rodar a tabela de testes
+- [x] 9.3 `src/actuator/actuator.cpp` + `env:actuator` ... (mesma descrição)
+  - Validado com CH340 + 1 motor/A4988 (eixo U): ping, EN, STATUS, BAD_ARGS, ESTOP (comando), WDOG, tempos, `dup`, janela 2 eixos, sentido, ângulo, 10 giros sem perder passo
+  - Flags necessárias: `-D HAVE_HWSERIAL2` no `[env:actuator]`; `#define link Serial2`
+  - `act_test.py move` envia `en 1` antes (watchdog de 1 s)
+- [x] 9.3b `T_JOG` (0x16) e `T_SPEED` (0x17) no protocolo/atuador/`act_test.py`. Validado em hardware (1 motor): `speed 900` encurta o `move`, `jog` gira os passos pedidos
+- [x] compila (`-D HAVE_HWSERIAL2`, `#define link Serial2`), grava, ping/STATUS/BAD_ARGS/ESTOP/WDOG OK com CH340
+- [x] 1 motor + A4988 (STEP PA0, DIR PB0) gira por comando
+- **Falta:** tempos (0,33 s / 0,67 s), `dup`, janela de 2 eixos, sentido, ângulo exato, 10 giros sem perder passo
 - [x] 9.4 `protocol.h` + `tools/proto_test`: TUDO OK (CRC, ida e volta, bit trocado, lixo, estouro, fuzz 2e6 bytes: 0 aceitos)
 - [x] 9.5 `ActuatorLink` compila (`pio run` OK). Teste real: com o atuador (9.3)
   - Regras para o Controller (10.4/18.2): chamar `enable(true)` no início de cada sessão (zera a memória de ids do atuador) e `ping` a cada `BENCH_ACT_PING_MS` (300) enquanto ocioso, senão o watchdog (1 s) solta os motores
-- [ ] 9.6 `[MVP]` Calibração com o MDF cortado: jog por face (serial), passos por 90 graus (inteiro), velocidade máxima com ~30% de margem, torque, folga do conector dos centros, `BENCH_SETTLE_MS` (vibração)
+- [ ] **(parcial)** 9.6 ... ferramentas prontas (jog, speed); falta medir: passos por 90°, `ACT_STEP_HZ` máx., sentido dos 6 eixos, `BENCH_SETTLE_MS`
 - [ ] 9.7 `[MVP]` Iluminação v0: anéis WS2812 (48 LEDs) em brilho FIXO (preset SCAN), 5 V separado, 1000 uF, 330 ohm no DIN, GND comum, level shifter 3,3→5 V (74AHCT125). No F103: timer+DMA; se bit-bang, atualizar só com motores PARADOS (o bit-bang desliga interrupções ~1,5 ms e perde passos)
 - [ ] 9.8 `[MVP]` Teste de resistência: 200 giros aleatórios e retorno ao RESOLVIDO (o solver do Master resolve de volta; conferir visualmente) sem perda de passo
 
@@ -413,7 +419,7 @@ Só depois do MVP funcionando (M5). Cada item entra quando incomodar ou quando a
 - [ ] 18.7 `env:bench`: `SOLVER_EVENTS=0`, sem animação, tela só com contadores. Com `SOLVER_EVENTS=0` NÃO chamar `hudScreen.setAutoTree` e NÃO registrar o `TreeScreen` (senão a busca deixa o usuário preso na tela de aviso). Reavaliar o WKUP/`taskMetrics`
 - [ ] 18.8 `env:native` (PC) com testes de `CubeState`/`CubieCube`/`verify`, `Coords`, planner de passos e parser do protocolo (fuzz). `CubeSolver`/`PruneTable` ficam FORA (dependem de `W25Q16`, `Arduino.h` e `CCM_RAM_BASE`)
 - [ ] 18.9 Assinatura das tabelas na flash externa (magic+versão+CRC) em `0x1FF000`; checar no boot (hoje tabela apagada = poda 15 = busca até 60 s sem aviso). Layout das tabelas em UM header gerado (hoje duplicado em `PruneTable.h` e `flash_tables.py`) + `tools/gen_config.py` (extrai os `#define` do `BenchConfig.h` para JSON)
-- [ ] 18.10 Diário de retomada na flash externa `0x1EF000..0x1FEFFF` (as tabelas terminam em `0x1EEE00`, folga de 512 B — _conferir: o cálculo dá `0x1EE200`, ver 8C_): índice do plano, contadores, `session_id`, `config_id`; com outra config o Master avisa e exige nova sessão
+- [ ] 18.10 Diário de retomada na flash externa `0x1EF000..0x1FEFFF` (as tabelas terminam em `0x1EE200`, folga de ~3,5 KB até 0x1EF000): índice do plano, contadores, `session_id`, `config_id`; com outra config o Master avisa e exige nova sessão
 - [ ] 18.11 Buzzer (`PIN_BUZZER`, `BENCH_BUZZER_ENABLE`): padrões para TROCAR CUBO, LOTE OK, `ERRO_3X`/falha de slave, ESTOP, AGUARDANDO SLAVE, fim da bateria; nunca em PA7; silenciável (rodar à noite). Estado "AGUARDANDO SLAVE" não é falha
 - [ ] 18.12 Linhas físicas TRIG/ACK/DONE/RST com EXTI e `DWT->CYCCNT` na ISR (resolução de 6 ns, intervalos < 25 s por causa do wrap de 32 bits); PING com RTT; analisador lógico barato (clone 24 MHz, 8 canais) para provar o tempo medido; chave de alimentação do slave (`PIN_SLAVE_PWR`) para power-cycle
 - [ ] 18.13 Slave simulado em Python (cubos, falhas, travamentos, CRC ruim injetados); vetores de teste CRC/COBS compartilhados C++/Python; `docs/slave_wiring.md` com o conector padrão (TX, RX, TRIG, ACK, DONE, RST, 3V3, GND) e `docs/rt_budget.md` (prioridades NVIC e das tasks)

@@ -1,8 +1,7 @@
 # act_test.py — testa o atuador pela serial (precisa de pyserial)
-# Uso: python act_test.py COM18 ping | en 0|1 | ms N | light N | estop
-#      python act_test.py COM18 move FA TA [FB TB] [dup]     (faces 0..5 = U R F D L B; voltas 1..3)
-import sys, time, serial
-
+# Uso: python act_test.py COM11 ping | en 0|1 | ms N | light N | estop
+#      python act_test.py COM11 move FA TA [FB TB] [dup]     (faces 0..5 = U R F D L B; voltas 1..3)
+import sys, time, serial, struct
 
 def crc16(b):
     c = 0xFFFF
@@ -53,7 +52,9 @@ def cobs_dec(d):
     return bytes(out)
 
 
-T = dict(ping=0x01, move=0x10, en=0x12, light=0x13, estop=0x14, ms=0x15)
+T = dict(
+    ping=0x01, move=0x10, en=0x12, light=0x13, estop=0x14, ms=0x15, jog=0x16, speed=0x17
+)
 STATE = ["IDLE", "MOVING", "ESTOP", "DISABLED", "WDOG"]
 RES = ["OK", "ESTOP", "DISABLED", "BUSY", "BAD_ARGS"]
 seq = 0
@@ -109,7 +110,10 @@ time.sleep(0.5)
 s.reset_input_buffer()
 cmd = sys.argv[2]
 a = [int(x) for x in sys.argv[3:] if x != "dup"]
+
 if cmd == "move":
+    send(s, T["en"], bytes([1]))
+    show(recv(s, 1))
     mid = int(time.time()) % 250 + 1
     fb, tb = (a[2], a[3]) if len(a) >= 4 else (255, 0)
     pl = bytes([mid, a[0], a[1], fb, tb])
@@ -124,6 +128,20 @@ if cmd == "move":
         send(s, T["move"], pl)
         show(recv(s, 2))
         print(f"  {time.time() - t0:.3f} s")
+        
+elif cmd == "jog":  # jog AXIS STEPS   (STEPS negativo = sentido contrário; passos crus no microstep atual)
+    send(s, T["en"], bytes([1]))
+    recv(s, 1)
+    mid = int(time.time()) % 250 + 1
+    t0 = time.time()
+    send(s, T["jog"], bytes([mid, a[0]]) + struct.pack("<h", a[1]))
+    show(recv(s, 8))
+    print(f"  tempo ate o DONE: {time.time() - t0:.3f} s")
+    
+elif cmd == "speed":  # speed HZ   (50..4000, referido ao microstep 1/4)
+    send(s, T["speed"], struct.pack("<H", a[0]))
+    show(recv(s, 1))
+    
 else:
     send(s, T[cmd], bytes(a))
     show(recv(s, 1))

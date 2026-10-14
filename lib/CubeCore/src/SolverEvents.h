@@ -1,6 +1,7 @@
 // SolverEvents.h — eventos do solver para a visualização da árvore (Etapa 6).
 // SOLVER_EVENTS=0 => tudo vira código vazio. Ligue com -D SOLVER_EVENTS=1.
 #pragma once
+#include <Arduino.h>
 #include <stdint.h>
 
 #ifndef SOLVER_EVENTS

@@ -13,16 +13,18 @@ Quadro cru: `[type, seq, len, payload (len bytes), crcHi, crcLo]`.
 
 ## 2. Mensagens
 
-| Tipo           | Cód.   | Sentido | Payload                                          |
-| -------------- | ------ | ------- | ------------------------------------------------ |
-| `T_PING`       | `0x01` | M -> A  | nenhum                                           |
-| `T_STATUS`     | `0x02` | A -> M  | `state, lastId, err`                             |
-| `T_MOVE_WINDOW`| `0x10` | M -> A  | `id, faceA, turnsA, faceB (255 = nenhuma), turnsB` |
-| `T_DONE`       | `0x11` | A -> M  | `id, result`                                     |
-| `T_EN`         | `0x12` | M -> A  | `1` liga os motores, `0` solta                   |
-| `T_LIGHT`      | `0x13` | M -> A  | preset (0 = apagado); ainda é stub               |
-| `T_ESTOP`      | `0x14` | M -> A  | nenhum                                           |
-| `T_MICROSTEP`  | `0x15` | M -> A  | `1, 2, 4, 8` ou `16`                             |
+| Tipo            | Cód.   | Sentido | Payload                                            |
+| --------------- | ------ | ------- | -------------------------------------------------- |
+| `T_PING`        | `0x01` | M -> A  | nenhum                                             |
+| `T_STATUS`      | `0x02` | A -> M  | `state, lastId, err`                               |
+| `T_MOVE_WINDOW` | `0x10` | M -> A  | `id, faceA, turnsA, faceB (255 = nenhuma), turnsB` |
+| `T_DONE`        | `0x11` | A -> M  | `id, result`                                       |
+| `T_EN`          | `0x12` | M -> A  | `1` liga os motores, `0` solta                     |
+| `T_LIGHT`       | `0x13` | M -> A  | preset (0 = apagado); ainda é stub                 |
+| `T_ESTOP`       | `0x14` | M -> A  | nenhum                                             |
+| `T_MICROSTEP`   | `0x15` | M -> A  | `1, 2, 4, 8` ou `16`                               |
+| `T_JOG`         | `0x16` | M -> A  | `id, axis, steps (int16 LE, com sinal)`            |
+| `T_SPEED`       | `0x17` | M -> A  | `hz (uint16 LE, 50..4000)`                         |
 
 Estados: `ST_IDLE, ST_MOVING, ST_ESTOP, ST_DISABLED, ST_WDOG`.
 Resultados do DONE: `R_OK, R_ESTOP, R_DISABLED, R_BUSY, R_BAD_ARGS`.
@@ -37,6 +39,8 @@ Uma **janela** de movimento é uma face, ou duas faces **opostas** girando junta
 - **`T_EN` com 1** recomeça a sessão: zera a memória de ids (`haveLast = false`) e limpa o erro. Chame no início de cada sessão. Com o ESTOP pressionado, vai para `ST_ESTOP`.
 - **ESTOP:** botão em PB8 (debounce ~5 ms) ou comando; para tudo, solta o EN e, se estava girando, responde o DONE pendente com `R_ESTOP`.
 - `T_MICROSTEP` só é aceito parado e com valores 1/2/4/8/16 (A4988: MS1 MS2 MS3 = 000, 100, 010, 110, 111); a velocidade angular é mantida.
+- **`T_JOG`** gira UM eixo por `steps` passos crus (sinal = sentido, no microstep atual), sem converter em quartos de volta. Responde `DONE` e é idempotente pelo `id`, como o `MOVE_WINDOW`. Serve só para calibração (9.6).
+- **`T_SPEED`** muda a frequência de passo (referida ao microstep 1/4) e responde `STATUS`. Só é aceito parado e vale até resetar a placa; fora de 50..4000 Hz vira `err = 3`.
 
 ## 4. Lado do Master: `ActuatorLink`
 
@@ -51,7 +55,7 @@ Chamar sempre de **uma** task (bloqueia com `vTaskDelay`).
 
 - Versão v0: velocidade constante, sem rampa.
 - O TIM2 gera os pulsos numa única ISR: uma interrupção sobe os STEP dos eixos que ainda têm passos (`BSRR` em GPIOA), a seguinte desce e conta o passo. Isso permite 2 eixos opostos ao mesmo tempo sem pinos de timer dedicados.
-- Passos por giro: `ACT_STEPS_PER_QUARTER` (200, com microstep 1/4) x 2 para meia-volta, escalado por `micro / 4`. Frequência `ACT_STEP_HZ` = 600 Hz: ~0,33 s por 90° e ~0,67 s por 180° (a janela dura o tempo do eixo mais longo).
+- Passos por giro: `ACT_STEPS_PER_QUARTER` (200, com microstep 1/4) x 2 para meia-volta, escalado por `micro / 4`. Frequência `ACT_STEP_HZ` = 600 Hz (alterável em tempo de execução por T_SPEED): ~0,33 s por 90° e ~0,67 s por 180° (a janela dura o tempo do eixo mais longo).
 - Sentido: horário em `turns` 1 e 2, anti-horário em 3; `ACT_DIR_INVERT` (bit por eixo) corrige o sentido real dos motores na calibração (checklist 9.6).
 - EN nasce solto no boot (`HIGH` antes do `pinMode`).
 - LED PC13: 500 ms parado, 100 ms em movimento/erro.
