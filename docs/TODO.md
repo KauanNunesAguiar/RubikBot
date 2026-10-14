@@ -296,6 +296,9 @@ Objetivo: o robô gira o cubo por comando. Controle simples primeiro; rampa e IS
 - [x] 9.5 `ActuatorLink` compila (`pio run` OK). Teste real: com o atuador (9.3)
   - Regras para o Controller (10.4/18.2): chamar `enable(true)` no início de cada sessão (zera a memória de ids do atuador) e `ping` a cada `BENCH_ACT_PING_MS` (300) enquanto ocioso, senão o watchdog (1 s) solta os motores
 - [ ] **(parcial)** 9.6 ... ferramentas prontas (jog, speed); falta medir: passos por 90°, `ACT_STEP_HZ` máx., sentido dos 6 eixos, `BENCH_SETTLE_MS`
+- [ ] 9.6 ADIADO até a PCB (valores dependem do hardware final: ACT_STEP_HZ, Vref, ACT_DIR_INVERT, ACT_STEPS_PER_QUARTER, BENCH_SETTLE_MS). Ferramentas prontas (jog, speed)
+- [ ] 9.7 e 9.8 ADIADOS até a PCB
+- [ ] PCB: incluir botão de ESTOP em PB8 ligado também ao EN dos A4988; pull-up externo no EN; pull-down nos STEP
 - [ ] 9.7 `[MVP]` Iluminação v0: anéis WS2812 (48 LEDs) em brilho FIXO (preset SCAN), 5 V separado, 1000 uF, 330 ohm no DIN, GND comum, level shifter 3,3→5 V (74AHCT125). No F103: timer+DMA; se bit-bang, atualizar só com motores PARADOS (o bit-bang desliga interrupções ~1,5 ms e perde passos)
 - [ ] 9.8 `[MVP]` Teste de resistência: 200 giros aleatórios e retorno ao RESOLVIDO (o solver do Master resolve de volta; conferir visualmente) sem perda de passo
 
