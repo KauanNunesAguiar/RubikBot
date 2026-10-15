@@ -199,6 +199,14 @@ Só depois do MVP (M5). Cada item entra quando incomodar ou quando a Etapa 16 ex
    - plano de avaliação (seeds + hash) em `0x1F7000..0x1FAFFF`, gravado pelo `flasher`
    - serializar acesso à flash (`read8` rápido não é thread-safe); anel de setores por causa do desgaste (~100 mil ciclos)
    - mapa de regiões descrito no diretório do 18.17
+- [ ] 18.19 Após reduzir as tabelas (18.17):
+   - teste diferencial novo × antigo (região temporária) antes de apagar as tabelas velhas
+   - poda na flash interna/CCM; coordenadas incrementais na F1 (ver 18.14)
+   - refino por CUSTO DE JANELA (U/D, R/L, F/B fundidos), não por nº de giros
+   - busca também no cubo inverso (reduz a cauda); a solução volta invertida
+   - histórico de solves em anel na flash externa (exportado pelo WKUP)
+   - assets de UI (fonte com acento, splash) na flash externa
+   - tabelas de poda extras só se simulação no PC mostrar que cortam nós diferentes
 
 # Etapa 19 — Treino/calibração no microcontrolador `FUTURO`
 
