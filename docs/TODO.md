@@ -183,13 +183,22 @@ Só depois do MVP (M5). Cada item entra quando incomodar ou quando a Etapa 16 ex
 - [ ] 18.7 `env:bench`: `SOLVER_EVENTS=0`, sem animação. Com `SOLVER_EVENTS=0` NÃO chamar `setAutoTree` nem registrar o `TreeScreen`
 - [ ] 18.8 `env:native` (PC) com testes de `CubeState`/`CubieCube`/`verify`, `Coords`, planner e parser (fuzz). `CubeSolver`/`PruneTable` ficam fora
 - [ ] 18.9 Assinatura das tabelas na flash (magic+versão+CRC) em `0x1FF000`, checada no boot (hoje tabela apagada = poda 15 = busca até 60 s sem aviso). Layout das tabelas em UM header gerado (hoje duplicado em `PruneTable.h` e `flash_tables.py`); `tools/gen_config.py`
-- [ ] 18.10 Diário de retomada na flash externa `0x1EF000..0x1FEFFF` (as tabelas terminam em `0x1EE200`, folga de ~3,5 KB): índice do plano, contadores, `session_id`, `config_id`
+- [ ] 18.10 Diário de retomada em anel de 16 KB em `0x1EF000..0x1F2FFF` (as tabelas terminam em `0x1EE200`)
 - [ ] 18.11 Buzzer (`PIN_BUZZER`): trocar set/câmera, lote OK, `ERRO_3X`, ESTOP, aguardando slave; silenciável. Nunca em PA7
 - [ ] 18.12 Linhas físicas TRIG/ACK/DONE/RST com EXTI e `DWT->CYCCNT`; analisador lógico barato; chave de alimentação do slave (`PIN_SLAVE_PWR`)
 - [ ] 18.13 Slave simulado em Python (falhas, travamentos, CRC ruim); vetores de teste CRC/COBS compartilhados C++/Python; `docs/rt_budget.md`
 - [ ] 18.14 Solver: micro-benchmark DWT; F1 por coordenadas incrementais (tabelas de movimento na flash interna ~166 KB); poda em 2 bits só se sobrar flash; cada experimento no sweep N=200, manter só ganho > 2%. Descartados: ver `baselines.md`
 - [ ] 18.15 Sensor de temperatura interna (gabinete fechado com LED, motores e fonte): registrar no sidecar/log; avisar se passar de um limite
 - [ ] 18.16 BH1750 para conferir o lux dos presets (opcional, ver 14.3)
+- [ ] 18.17 Flash externa v2 (só depois do M5; cada passo medido no sweep N=200, manter só ganho > 2%):
+   1. medir o custo real de `read8` com `METRICS_ENABLED=0` e otimizar a transação SPI (medido 2,4 us; piso teórico ~1 us a 42 MHz)
+   2. diretório na flash (magic, versão, CRC, por tabela: offset, nA, nB, bits/entrada, jogo de giros), gerado pelo `gen_tables` e lido no boot (junto com 18.9)
+   3. tabelas reduzidas por simetria (16 simetrias do eixo U-D, ~150-200 KB em vez de 2 MB) para a flash interna; só vale se a conversão de simetria custar menos que a leitura externa
+- [ ] 18.18 Usos extras da flash externa (depois do M5; escrita SÓ com o solver parado):
+   - config persistente em anel `0x1F3000..0x1F6FFF`: calibração do touch, recorde/contadores, parâmetros do atuador (enviados no `T_EN`), config por câmera
+   - plano de avaliação (seeds + hash) em `0x1F7000..0x1FAFFF`, gravado pelo `flasher`
+   - serializar acesso à flash (`read8` rápido não é thread-safe); anel de setores por causa do desgaste (~100 mil ciclos)
+   - mapa de regiões descrito no diretório do 18.17
 
 # Etapa 19 — Treino/calibração no microcontrolador `FUTURO`
 
